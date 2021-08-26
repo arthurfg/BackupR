@@ -14,7 +14,7 @@ tx_desocupacao_mes <- get_sidra(api = "/t/6381/n1/all/v/4099/p/all/d/v4099%201")
 po <- get_sidra(api = "/t/6320/n1/all/v/4090/p/all/c11913/96165")
 tx_combinada <- get_sidra(api = "/t/6439/n1/all/v/4114/p/last%2075/d/v4114%201")
 po_vinculo <- get_sidra(api = "/t/6320/n1/all/v/8435/p/last%2022/c11913/31722,31723,31727,96165,96171/d/v8435%201")
-
+desalento <- get_sidra(api = "/t/6803/n1/all/v/9839,9845/p/last%2019/d/v9839%201,v9845%201")
 
 
 ##### limpando as bases e fazendo os gráficos #####
@@ -77,3 +77,18 @@ po_vinculo %>%
 
 
 
+desalento %>%
+  mutate(date = ym(... =`Trimestre Móvel (Código)` ))%>%
+  mutate(tipo = case_when(desalento$`Variável (Código)` == 9839 ~ "Percentual de pessoas desalentadas",
+                          TRUE ~ "Variação em relação ao mesmo trimestre do ano anterior"))%>%
+  select(Valor, date, tipo) %>%
+  ggplot(aes(x= date, y = Valor, colour = as.factor(tipo)))+
+  geom_line(size = 0.8)+
+  geom_point()+
+  theme_classic()+
+  scale_x_date(breaks = date_breaks("3 months"),
+               labels = date_format("%b/%Y"))+
+  theme(axis.text.x=element_text(angle=90, hjust=1))+
+  theme(legend.position="none")+
+  facet_wrap(~tipo)
+  scale_color_brewer(palette="Dark2")
