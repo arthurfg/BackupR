@@ -1,2 +1,3 @@
 # BackupR
-Backup público dos meus códigos e estudos no R
+Backup público dos meus códigos (incrivelmente mal documentados) e estudos no R 
+
