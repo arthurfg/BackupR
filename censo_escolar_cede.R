@@ -1,7 +1,7 @@
 library(basedosdados)
 library(tidyverse)
 
-## Base de Turmas
+## Base de Turmas para o Estado do Rio de Janeiro
 
 set_billing_id("casebd")
 
@@ -20,7 +20,6 @@ profissional <- c(39,40,64,68,67,73,74)
 eja <- c(43:48,51,58,60:63,69:72)
 
 
-
 turmas_rj <- tumas_rj %>%
   mutate(classes = case_when(etapa_ensino %in% ed_infantil ~ "Educação Infantil",
                              etapa_ensino %in% fundamental ~"Ensino Fundamental",
@@ -29,10 +28,23 @@ turmas_rj <- tumas_rj %>%
                              etapa_ensino %in% eja ~"Educação de Jovens e Adultos")) %>% distinct(id_escola) %>% nrow()
   drop_na(etapa_ensino)
 
-turmas_rj %>% filter(classes == "Educação de Jovens e Adultos") %>% distinct(id_escola) %>%
-  summarise(total = n())
   
-## Base de Escolas
+  
+etapas <- c(unique(turmas_rj$classes))
+total <- list()
+
+for (etapa in etapas) {
+  turmas_rj %>%
+    filter(classes == etapa) %>%
+    distinct(id_escola) %>%
+    summarise(etapa = n()) -> total[etapa]
+  
+}
+rio <- as.data.frame.list(total) ## total por etapa de ensino
+
+
+
+## Base de Escolas (não utilizada)
 
 query2 <- bdplyr("br_inep_censo_escolar.escola")%>%
   filter(ano == 2018, sigla_uf == "RJ")%>%
