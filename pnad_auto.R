@@ -1,5 +1,7 @@
+### Arthur de Figueiredo Gusmão
+
 # instala os pacotes:
-libs <- c("DBI", "RSQLite" , "fst" , "survey", "basedosdados")
+libs <- c("DBI", "RSQLite" , "fst" , "survey", "basedosdados", "openxlsx")
 libs.novas <- libs[ !( libs %in% installed.packages()[ , "Package" ] ) ]
 if( length( libs.novas ) ) install.packages( libs.novas )
 
@@ -10,76 +12,174 @@ library(RSQLite)
 library(survey)
 library(basedosdados)
 library(tidyverse)
-
-### variáveis
-
-
-vars <- c(ano, trimestre, id_uf, id_upa, id_estrato, 
-          id_domicilio, V1008, V1028, V4013, V2007, VD4009, V4019, VD4020)
+library(openxlsx)
 
 
-## Importando
-set_billing_id("casebd")
+#### Importando e salvado  ####
 
-pnad <- bdplyr("br_ibge_pnadc.microdados") %>%
-  filter(ano == 2019, trimestre == 4) %>%
+## Billing id do projeto do google bigquery
+
+set_billing_id("casebd") ### no caso, esse é o meu billing id. Caso queira baixar os dados no seu computador, posso mostrar como criar um projeto no google BiqQuery.
+
+## Importa com as variáveis para o Bootstrap
+#### Demora bastante, o arquivo fica bem mais pesado por conta das variáveis adicionais.
+
+pnad <- bdplyr("br_ibge_pnadc.microdados")  %>%
+  select(c(ano, trimestre, id_uf, id_upa, id_estrato, 
+           id_domicilio, V1008, V1028, V4013, V2007, VD4009, V4019, VD4020, starts_with("V1028"))) 
+
+
+## Importa sem as variáveis de Bootstrap (fica bem mais leve, a estimativa é a mesma. O que muda é a estimação dos SE`s)
+pnad <- bdplyr("br_ibge_pnadc.microdados")%>%
   select(c(ano, trimestre, id_uf, id_upa, id_estrato, 
            id_domicilio, V1008, V1028, V4013, V2007, VD4009, V4019, VD4020))
 
-# to rds - with compression
+
+## Exportando para .rds sem bootstrap
 basedosdados::bd_write_rds(.lazy_tbl = pnad,
-                           "pnad_201904.rds")
+                           "pnad_2012_2022-sbs.rds")
+
+
+## Exportando para .rds com bootstrap
+basedosdados::bd_write_rds(.lazy_tbl = pnad,
+                           "pnad_2012_2022-bs.rds")
   
-df <- bd_collect(query)
+
+## Importando o .rds sem bootstrap
+pnad_2019 <- readRDS(file = "pnad_2012_2022-sbs.rds")
 
 
-pnad2019 <- readRDS(file = "pnad_201904.rds")
+## Importando o .rds com bootstrap
+pnad_2019 <- readRDS(file = "pnad_2021-bs.rds")
 
-pnadc.design <-
-  svydesign(
-    ids = ~ id_upa + V1008 ,
-    strata = ~ id_estrato ,
-    weights = ~ V1028 ,
-    data = pnad2019,
-    nest = TRUE )
+
+#### Dicionário das variáveis ####
+
+### Imputando o dicionário das variáveis
+pnad_2019 %>%
+  filter(ano > 2014) %>% 
+  mutate(filtrar = as.numeric(paste(ano, trimestre, sep = ""))) %>% 
+  filter(filtrar != 20151, filtrar != 20152, filtrar != 20153) -> pnad_2019
+
+pnad_2019 <- pnad_2019 %>%
+  filter(ano > 2019)
+
+  
+pnad_2019 %>%
+  mutate(V2007d = case_when(V2007 == 1 ~ "Homem",
+                            V2007 == 2 ~ "Mulher",
+                            TRUE ~ "NA"),
+         VD4009d = case_when(VD4009 == 1 ~ "Empregado no setor privado com carteira de trabalho assinada",
+                             VD4009 == 2 ~ "Empregado no setor privado sem carteira de trabalho assinada",
+                             VD4009 == 3 ~ "Trabalhador doméstico com carteira de trabalho assinada",
+                             VD4009 == 4 ~ "Trabalhador doméstico sem carteira de trabalho assinada",
+                             VD4009 == 5 ~ "Empregado no setor público com carteira de trabalho assinada",
+                             VD4009 == 6 ~ "Empregado no setor público sem carteira de trabalho assinada",
+                             VD4009 == 7 ~ "Militar e servidor estatutário",
+                             VD4009 == 8 ~ "Empregador",
+                             VD4009 == 9 ~ "Conta-própria",
+                             VD4009 == 10 ~ "Trabalhador familiar auxiliar",
+                             TRUE ~ "NA"),
+         V4019d = case_when(V4019 == 1 ~ "Sim",
+                            V4019 == 2 ~ "Não",
+                            TRUE ~ "NA")) -> pnad_2019
+pnad_2019[pnad_2019 == "NA"] <- NA
+
+#### Criando o objeto principal ####
+##### Função que cria o objeto de desenho amostral complexto.
+### Ela ñ foi usada nesse trabalho, mas pode ser útil para os próximos.
+my_func <- function(ano, trimestre) {
+  pnad_2019  %>% 
+    filter(ano == ano, trimestre == trimestre) -> pnad
+  
+  teste <- svydesign(
+      ids = ~ id_upa + V1008 ,
+      strata = ~ id_estrato ,
+      weights = ~ V1028 ,
+      data = pnad,
+      nest = TRUE )
+  
+  return(teste)
+  
+  
+}
+
+##### Criando a tibble cada objeto svy.design, por ano e trimestre.
+### Isso pode demorar.
+
+a <- expand.grid(ano = 2015:2018, trimestre = 1:4) %>%
+  as_tibble() %>%
+  mutate(ano2 = case_when(ano == 2015 & trimestre == 1 ~ "NA",
+                         ano == 2015 & trimestre == 2 ~ "NA",
+                         ano == 2015 & trimestre == 3 ~ "NA",
+                         TRUE ~ "2015"))%>%
+  filter(ano2 != "NA") %>%
+  arrange(ano) %>%
+  select(ano, trimestre) %>%
+  mutate(pnad_design = map2(.x = ano, .y= trimestre, function(.x,.y){
+
+    pnad_2019 %>% 
+      filter(ano == .x, trimestre == .y) -> pnad
+    
+    pnadc.design <-
+      svydesign(
+        ids = ~ id_upa + V1008 ,
+        strata = ~ id_estrato ,
+        weights = ~ V1028 ,
+        data = pnad,
+        nest = TRUE )
+    return(pnadc.design)
+  
+    
+  }))
+
+a <- expand.grid(ano = 2020:2021, trimestre = 1:4) %>%
+  as_tibble() %>%
+  mutate(ano2 = case_when(ano == 2021 & trimestre == 4 ~ "NA",
+                          TRUE ~ "2021"))%>%
+  filter(ano2 != "NA") %>%
+  arrange(ano) %>%
+  select(ano, trimestre) %>%
+  mutate(pnad_design = map2(.x = ano, .y= trimestre, function(.x,.y){
+    
+    pnad_2019 %>% 
+      filter(ano == .x, trimestre == .y) -> pnad
+    
+    pnadc.design <-
+      svydesign(
+        ids = ~ id_upa + V1008 ,
+        strata = ~ id_estrato ,
+        weights = ~ V1028 ,
+        data = pnad,
+        nest = TRUE )
+    return(pnadc.design)
+    
+    
+  }))
+
+
+
 
 options(scipen = 999) # opdao que deixa de mostrar numeros no formato cientifico.
 
-# total de pessoas na transformação
 
-total_transf.19 <- svytotal(x=~V4013>=10010 & V4013<=33002 , design = pnadc.design, na.rm = TRUE)
+######  Bootstrap (caso queira usar) #####
 
-a <- as.data.frame(total_transf.19)
-# ver o total de pessoas para saber se estou pegando toda população
-
-total.19 <- svytotal(x=~V2007, design = pnadc.design, na.rm = TRUE)
-
-# ver o total de pessoas formais - empregado no setor privado com carteira assinada + empregador com cnpj
-
-formais_transf.1 <- svytotal(x=~V4013>=10010 & V4013<=33002, design=subset(pnadc.design, VD4009 == 
-                                                                             "Empregador" & V4019 == "Sim"), na.rm = TRUE) 
-
-formais_transf.2 <- svytotal(x=~V4013>=10010 & V4013<=33002, design=subset(pnadc.design, VD4009 == 
-                                                                             "Empregado no setor privado com carteira de trabalho assinada"), na.rm = TRUE)
+bootweights.col <- grep("V1028[0-9]{3}", colnames(pnad_2019), value = TRUE)
+bootweights.mat <- pnad_2019[, bootweights.col]
+bootweights.mat <- as.matrix(bootweights.mat)
+pnad_2019[,bootweights.col] <- NULL
 
 
-total_formal_transf <- formais_transf.1[[2]]+formais_transf.2[[2]]
+### Criando o objeto de desenho amostral complexo com bootstrap
+
+pnadc_boot <- survey::svrepdesign(data = pnad_2019, type = "bootstrap", weights = ~V1028,
+                                  repweights = bootweights.mat)
 
 
-# total de informais 
 
-total_informais_scarteira_transf <- svytotal(x=~V4013>=10010 & V4013<=33002, design=subset(pnadc.design, 
-                                                                                           VD4009 == "Empregado no setor privado sem carteira de trabalho assinada"),
-                                             na.rm = TRUE)
+#### Neste ponto teremos o objeto necessário para efetuar todos os cálculos com o pacote survey. Estes serão feitos em um script
+#### auxiliar, para melhor entendimento e limpeza do código.
 
 
-informais_autonomos_transf.1 <- svytotal(x=~V4013>=10010 & V4013<=33002, design=subset(pnadc.design, 
-                                                                                       VD4009 %in% c("Conta-própria", "Trabalhador familiar auxiliar")), na.rm = TRUE)
-
-
-informais_autonomos_transf.2 <- svytotal(x=~V4013>=10010 & V4013<=33002, design=subset(pnadc.design, V4019 == 
-                                                                                         "Não" & VD4009 == "Empregador"), na.rm = TRUE)
-
-
-total_informais_autonomos <- informais_autonomos_transf.1[[2]] + informais_autonomos_transf.2[[2]]
 
